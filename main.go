@@ -12,8 +12,20 @@ import (
 	"strings"
 )
 
+// var (
+// 	pathToBinary string
+// 	imgName      string
+// 	repoArn      string
+// )
+
+// // func init() {
+// // 	flag.StringVar(&pathToBinary, "path", "/home/ec2-user/amazon-ecr-containerd-resolver", "Absolute path to the binary to be tested")
+// // 	flag.StringVar(&imgName, "img-name", "1gb-single-layer", "Image name")
+// // 	flag.StringVar(&repoArn, "arn", "ecr.aws/arn:aws:ecr:us-west-1:020023120753:repository/", "Repository ARN")
+// }
+
 const (
-	pathToBinary    = "../amazon-ecr-containerd-resolver"
+	pathToBinary    = "/home/ec2-user/amazon-ecr-containerd-resolver"
 	imgName         = "1gb-single-layer"
 	repoArn         = "ecr.aws/arn:aws:ecr:us-west-1:020023120753:repository/"
 	img             = repoArn + imgName + ":latest"
@@ -22,24 +34,23 @@ const (
 )
 
 func main() {
-	// Setup
+
+	// flag.Parse()
+
+	// img := repoArn + imgName + ":latest"
+	// resultsFile     := imgName + "/results.csv"
 	setup()
 
-	// Main loop
 	runMainLoop()
-
-	// Calculate and save percentiles
-	calculateAndSavePercentiles()
 }
 
 func setup() {
 	os.MkdirAll(imgName, 0777)
 	os.Chmod(imgName, 0777)
-	os.Remove(resultsFile)
-	os.RemoveAll("./bin")
+	os.Remove(pathToBinary + imgName + "/results.csv")
+	os.RemoveAll(pathToBinary + "/bin")
 
-	// Build project
-	cmd := exec.Command("sudo", "make", "build")
+	cmd := exec.Command("make", "build")
 	cmd.Dir = pathToBinary
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -48,8 +59,7 @@ func setup() {
 		os.Exit(1)
 	}
 
-	// Prepare CSV file
-	file, err := os.Create(resultsFile)
+	file, err := os.Create(imgName + "/results.csv")
 	if err != nil {
 		fmt.Println("Error creating results file:", err)
 		os.Exit(1)
@@ -60,26 +70,25 @@ func setup() {
 
 func runMainLoop() {
 	for i := 1; i <= 4; i++ {
-		for j := 1; j <= 10; j++ {
+		for j := 1; j <= 1; j++ {
 			fmt.Fprintf(os.Stderr, "Run: %d with parallel arg: %d\n", j, i)
 			ecrPullParallel := 7 - i
 
-			// Set up environment
 			restartContainerd()
 
-			cgroupParent := "ecr-pull-benchmark"
+			cgroupParent := "crt-benchmark"
 			cgroupChild := fmt.Sprintf("count-%d-parallel-%d-slice", j, ecrPullParallel)
 			cgroup := filepath.Join(cgroupParent, cgroupChild)
-			setupCgroup(cgroup)
+			setupCgroup(cgroupParent, cgroupChild)
 
 			outputFile := "/tmp/" + cgroupChild
 
-			// Pull image and collect data
 			runTestScript(cgroup, outputFile, ecrPullParallel)
 
 			elapsed, unpack, time, unpackTime, speed := extractData(outputFile)
 			fmt.Fprintln(os.Stderr, elapsed)
 			fmt.Println("unpack", unpack)
+			// fmt.Println("elapsed, unpack, time, unpackTime, speed", elapsed, unpack, time, unpackTime, speed)
 
 			if j > 2 {
 				appendToCSV(resultsFile, []string{strconv.Itoa(j), strconv.Itoa(ecrPullParallel), time, unpackTime, speed})
@@ -99,10 +108,18 @@ func restartContainerd() {
 	exec.Command("sudo", "service", "containerd", "start").Run()
 }
 
-func setupCgroup(cgroup string) {
-	os.MkdirAll("/sys/fs/cgroup/"+cgroup, 0755)
-	exec.Command("sudo", "sh", "-c", "echo '+memory' | sudo tee /sys/fs/cgroup/"+filepath.Dir(cgroup)+"/cgroup.subtree_control").Run()
-	exec.Command("sudo", "sh", "-c", "echo '+cpu' | sudo tee /sys/fs/cgroup/"+filepath.Dir(cgroup)+"/cgroup.subtree_control").Run()
+func setupCgroup(cgroupParent string, cgroupChild string) {
+	fmt.Println("------------------------ setupCgroup------------------------")
+	cgroup := filepath.Join(cgroupParent, cgroupChild)
+	// os.MkdirAll("/sys/fs/cgroup/"+cgroup, 0755)
+	exec.Command("sudo", "mkdir", "-p", "/sys/fs/cgroup/"+cgroup).Run()
+	if stat, err := os.Stat("/sys/fs/cgroup/" + cgroup); err == nil && stat.IsDir() {
+		fmt.Println("path /sys/fs/cgroup/" + cgroup + " is a directory")
+	} else {
+		fmt.Println("path is not a directory", err)
+	}
+	exec.Command("sudo", "sh", "-c", "echo '+memory' | sudo tee /sys/fs/cgroup/"+cgroupParent+"/cgroup.subtree_control").Run()
+	exec.Command("sudo", "sh", "-c", "echo '+cpu' | sudo tee /sys/fs/cgroup/"+cgroupParent+"/cgroup.subtree_control").Run()
 }
 
 func removeCgroup(cgroup string) {
@@ -110,7 +127,11 @@ func removeCgroup(cgroup string) {
 }
 
 func runTestScript(cgroup, outputFile string, ecrPullParallel int) {
-	cmd := exec.Command("sudo", "./test.sh", cgroup, outputFile, "sudo", fmt.Sprintf("ECR_PULL_PARALLEL=%d", ecrPullParallel), "./bin/ecr-pull", img)
+
+	// cmd := exec.Command("ls")
+	cmd := exec.Command("sudo", "./test.sh", cgroup, outputFile, "sudo", "ECR_PULL_PARALLEL=6", "./bin/ecr-pull", img)
+	// cmd := exec.Command("sudo", "./test.sh", cgroup, outputFile, "sleep 1000")
+	cmd.Dir = pathToBinary
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -130,24 +151,31 @@ func extractData(outputFile string) (string, string, string, string, string) {
 	var elapsed, unpack string
 	for scanner.Scan() {
 		line := scanner.Text()
+		// fmt.Println("line: ", line)
 		if strings.Contains(line, "elapsed") {
 			elapsed = line
+			// fmt.Println("elapsed: ", elapsed)
 		}
 		if strings.Contains(line, "unpackTime") {
 			unpack = line
+			// fmt.Println("unpack: ", unpack)
 		}
 	}
 
-	time := extractValue(elapsed, 2)
-	unpackTime := extractValue(unpack, 2)
+	time := extractValue(elapsed, 1)
+	unpackTime := extractValue(unpack, 1)
 	speed := extractSpeed(elapsed)
+
+	fmt.Println("Extracted data at 169 : elapsed, unpack, time, unpackTime, speed ", elapsed, unpack, time, unpackTime, speed)
 
 	return elapsed, unpack, time, unpackTime, speed
 }
 
 func extractValue(line string, fieldIndex int) string {
 	fields := strings.Fields(line)
+	// fmt.Println("len(fields) for line", line, " = ", len(fields))
 	if len(fields) > fieldIndex {
+		// fmt.Println("fields[fieldIndex(1)]", fields[fieldIndex])
 		return strings.TrimSuffix(fields[fieldIndex], "s")
 	}
 	return ""
