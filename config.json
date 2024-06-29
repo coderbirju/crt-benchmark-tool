@@ -1,0 +1,8 @@
+{
+    "BinaryPath": "/home/ec2-user/amazon-ecr-containerd-resolver",
+    "BinaryUrl": "/home/ec2-user/amazon-ecr-containerd-resolver/bin/ecr-pull",
+    "ImgUrl": "ecr.aws/arn:aws:ecr:us-west-1:020023120753:repository/1gb-single-layer",
+    "ImgTag": "latest",
+    "ImgName": "1gb-single-layer",
+    "BinaryArgs": "ECR_PULL_PARALLEL=6"
+}

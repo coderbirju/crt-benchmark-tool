@@ -8,20 +8,28 @@ import (
 	"strings"
 )
 
-// RunInCgroup runs a command in a specified cgroup, capturing its output to a file.
-func RunInCgroup(cgroup, output string, command string, args ...string) error {
+func RunInCgroup(cgroup, output string, pullImageInputStruct Input, command string, args ...string) error {
 	if cgroup == "" || output == "" || command == "" {
 		return fmt.Errorf("missing required arguments")
 	}
 
 	cgroupProcsFile := fmt.Sprintf("/sys/fs/cgroup/%s/cgroup.procs", cgroup)
-
-	cmd := exec.Command(command, args...)
 	outfile, err := os.Create(output)
+
+	var img = pullImageInputStruct.imgUrl + ":" + pullImageInputStruct.imgTag
+
+	cmd := exec.Command("sudo", "ECR_PULL_PARALLEL=6", "./bin/ecr-pull", img)
+	cmd.Dir = pullImageInputStruct.pathToBinary
+
 	if err != nil {
 		return fmt.Errorf("error creating output file: %v", err)
 	}
 	defer outfile.Close()
+
+	// Use this to debug potential errors
+	// multiWriter := io.MultiWriter(outfile, os.Stdout)
+	// cmd.Stdout = multiWriter
+	// cmd.Stderr = multiWriter
 	cmd.Stdout = outfile
 	cmd.Stderr = outfile
 
@@ -56,6 +64,7 @@ func addPidToCgroup(cgroupProcsFile string, pid int) error {
 }
 
 func addChildPids(cgroupProcsFile string, parentPid int) {
+	fmt.Println("addChildPids parentPid : ", parentPid)
 	childPids, err := getChildPids(parentPid)
 	if err != nil {
 		fmt.Println("Error getting child PIDs:", err)
